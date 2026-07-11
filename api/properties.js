@@ -23,7 +23,7 @@ export default async function handler(req, res) {
   try {
     if (req.method === 'GET') {
       const rows = await sql`
-        SELECT id, title, area, emirate, price, beds, baths, sqft, views, created_at
+        SELECT id, title, area, emirate, price, beds, baths, sqft, furnished, service_charge, description, views, owner_id, created_at
         FROM properties
         WHERE status = 'active' AND visibility = 'public'
         ORDER BY created_at DESC
@@ -34,14 +34,14 @@ export default async function handler(req, res) {
     }
 
     if (req.method === 'POST') {
-      const { title, area, emirate, price, beds, baths, sqft, ownerId } = req.body || {};
+      const { title, area, emirate, price, beds, baths, sqft, furnished, serviceCharge, description, ownerId } = req.body || {};
       if (!title || !area || !price) {
         res.status(400).json({ error: 'title, area, and price are required' });
         return;
       }
       const rows = await sql`
-        INSERT INTO properties (title, area, emirate, price, beds, baths, sqft, owner_id)
-        VALUES (${title}, ${area}, ${emirate || 'Dubai'}, ${price}, ${beds || null}, ${baths || null}, ${sqft || null}, ${ownerId || null})
+        INSERT INTO properties (title, area, emirate, price, beds, baths, sqft, furnished, service_charge, description, owner_id)
+        VALUES (${title}, ${area}, ${emirate || 'Dubai'}, ${price}, ${beds || null}, ${baths || null}, ${sqft || null}, ${furnished || null}, ${serviceCharge || null}, ${description || null}, ${ownerId || null})
         RETURNING id, title, area, emirate, price, created_at
       `;
       await sql`

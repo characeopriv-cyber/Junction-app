@@ -6,6 +6,16 @@ const sql = neon(process.env.DATABASE_URL);
 export default async function handler(req, res) {
   try {
     if (req.method === 'GET') {
+      const { userId } = req.query;
+      if (userId) {
+        const mine = await sql`
+          SELECT c.code, c.name, c.flag FROM circles c
+          JOIN circle_members m ON m.circle_code = c.code
+          WHERE m.user_id = ${userId}
+        `;
+        res.status(200).json({ circles: mine });
+        return;
+      }
       const rows = await sql`
         SELECT c.code, c.name, c.flag,
           COUNT(m.user_id) AS total

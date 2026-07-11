@@ -6,7 +6,7 @@ export default async function handler(req, res) {
   try {
     if (req.method === 'GET') {
       const rows = await sql`
-        SELECT id, title, category, area, price_text, description, views, created_at
+        SELECT id, title, category, area, price_text, description, views, owner_id, created_at
         FROM services WHERE status = 'active'
         ORDER BY created_at DESC LIMIT 100
       `;
@@ -31,4 +31,4 @@ export default async function handler(req, res) {
   } catch (err) {
     res.status(500).json({ error: `Database error: ${err.message}` });
   }
-}
+      }

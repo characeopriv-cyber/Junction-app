@@ -1,5 +1,12 @@
 // /api/services — GET list, POST create (jobs + services marketplace)
+//
+// SECURITY: POST now uses the SESSION-VERIFIED user as owner_id, never
+// a client-supplied one — previously anyone could post a service and
+// claim it belonged to any owner_id they wanted.
+
 import { neon } from '@neondatabase/serverless';
+import { requireAuth } from '../lib/auth.js';
+
 const sql = neon(process.env.DATABASE_URL);
 
 export default async function handler(req, res) {
@@ -14,14 +21,16 @@ export default async function handler(req, res) {
       return;
     }
     if (req.method === 'POST') {
-      const { title, category, area, priceText, description, ownerId } = req.body || {};
+      const me = requireAuth(req, res);
+      if (!me) return;
+      const { title, category, area, priceText, description } = req.body || {};
       if (!title || !category) {
         res.status(400).json({ error: 'title and category are required' });
         return;
       }
       const rows = await sql`
         INSERT INTO services (title, category, area, price_text, description, owner_id)
-        VALUES (${title}, ${category}, ${area || null}, ${priceText || null}, ${description || null}, ${ownerId || null})
+        VALUES (${title}, ${category}, ${area || null}, ${priceText || null}, ${description || null}, ${me})
         RETURNING id, title, category, created_at
       `;
       res.status(201).json({ service: rows[0] });
@@ -31,4 +40,4 @@ export default async function handler(req, res) {
   } catch (err) {
     res.status(500).json({ error: `Database error: ${err.message}` });
   }
-      }
+}

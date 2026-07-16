@@ -1,10 +1,11 @@
 // /api/people — Passport profile editing, job-matching candidate
-// profiles, AND media uploads, all folded into ONE serverless function.
-// This looks unusual, but Vercel's Hobby plan caps a deployment at 12
-// functions total — folding three small, related concerns into one
-// file (routed by ?action=) buys headroom without losing anything.
-// If/when this project moves to Vercel Pro, these can be split back
-// into separate files with zero code changes beyond the routing.
+// profiles, AND media uploads, all folded into ONE serverless function
+// (Vercel Hobby plan caps a deployment at 12 functions total).
+//
+// SECURITY: PATCH profile, GET/POST candidate, and upload all now
+// require a valid session and act on the SESSION-VERIFIED user id, not
+// whatever userId the client sends. Previously anyone could edit
+// anyone's name/bio/Passport tier by just changing a request body.
 //
 // Actions: ?action=profile | ?action=candidate | ?action=upload
 //
@@ -33,11 +34,14 @@ import { neon } from '@neondatabase/serverless';
 import { put } from '@vercel/blob';
 import { IncomingForm } from 'formidable';
 import fs from 'fs';
+import { requireAuth } from '../lib/auth.js';
 
 const sql = neon(process.env.DATABASE_URL);
 
 // bodyParser must be OFF at the file level so uploads (multipart) work;
 // for the JSON actions (profile/candidate) we parse the raw body ourselves.
+// Note: req.headers.cookie is still available with bodyParser off, so
+// session checks work fine here.
 export const config = { api: { bodyParser: false } };
 
 function readJsonBody(req) {
@@ -63,6 +67,8 @@ function parseForm(req) {
 
 async function handleProfile(req, res) {
   if (req.method === 'GET') {
+    // Viewing a profile (name/bio/tier) isn't sensitive, so this can
+    // still look up by query userId — but PATCH below is locked down.
     const { userId } = req.query;
     if (!userId) return res.status(400).json({ error: 'userId is required' });
     const rows = await sql`
@@ -73,12 +79,14 @@ async function handleProfile(req, res) {
     return res.status(200).json({ user: rows[0] });
   }
   if (req.method === 'PATCH') {
+    const me = requireAuth(req, res);
+    if (!me) return;
     const body = await readJsonBody(req);
-    const { userId, name, bio, avatarUrl, backgroundId, roleLabel, passportTier } = body || {};
-    if (!userId) return res.status(400).json({ error: 'userId is required' });
+    const { name, bio, avatarUrl, backgroundId, roleLabel, passportTier } = body || {};
     if (passportTier && !['ordinary', 'services', 'investor'].includes(passportTier)) {
       return res.status(400).json({ error: 'passportTier must be ordinary, services, or investor' });
     }
+    // Always updates the SESSION user's own row — you cannot edit anyone else.
     const rows = await sql`
       UPDATE users SET
         name = COALESCE(${name || null}, name),
@@ -87,7 +95,7 @@ async function handleProfile(req, res) {
         background_id = COALESCE(${backgroundId || null}, background_id),
         role_label = COALESCE(${roleLabel || null}, role_label),
         passport_tier = COALESCE(${passportTier || null}, passport_tier)
-      WHERE id = ${userId}
+      WHERE id = ${me}
       RETURNING id, name, email, bio, junction_id, avatar_url, background_id, passport_tier, role_label
     `;
     if (rows.length === 0) return res.status(404).json({ error: 'User not found' });
@@ -98,12 +106,16 @@ async function handleProfile(req, res) {
 }
 
 async function handleCandidate(req, res) {
+  // Candidate profiles (job history, salary expectations by proxy of
+  // category/experience) are private — always require auth and always
+  // act on the session's own id.
+  const me = requireAuth(req, res);
+  if (!me) return;
+
   if (req.method === 'GET') {
-    const { userId } = req.query;
-    if (!userId) return res.status(400).json({ error: 'userId is required' });
     const rows = await sql`
       SELECT user_id, category, emirate, experience, languages
-      FROM candidate_profiles WHERE user_id = ${userId} LIMIT 1
+      FROM candidate_profiles WHERE user_id = ${me} LIMIT 1
     `;
     if (rows.length === 0) return res.status(200).json({ profile: null });
     const r = rows[0];
@@ -111,11 +123,11 @@ async function handleCandidate(req, res) {
   }
   if (req.method === 'POST') {
     const body = await readJsonBody(req);
-    const { userId, category, emirate, experience, languages } = body || {};
-    if (!userId || !category) return res.status(400).json({ error: 'userId and category are required' });
+    const { category, emirate, experience, languages } = body || {};
+    if (!category) return res.status(400).json({ error: 'category is required' });
     await sql`
       INSERT INTO candidate_profiles (user_id, category, emirate, experience, languages, updated_at)
-      VALUES (${userId}, ${category}, ${emirate || null}, ${experience || null}, ${JSON.stringify(languages || [])}, now())
+      VALUES (${me}, ${category}, ${emirate || null}, ${experience || null}, ${JSON.stringify(languages || [])}, now())
       ON CONFLICT (user_id) DO UPDATE SET
         category = ${category}, emirate = ${emirate || null}, experience = ${experience || null},
         languages = ${JSON.stringify(languages || [])}, updated_at = now()
@@ -127,6 +139,8 @@ async function handleCandidate(req, res) {
 }
 
 async function handleUpload(req, res) {
+  const me = requireAuth(req, res);
+  if (!me) return;
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ error: 'Method not allowed' });
@@ -144,6 +158,8 @@ async function handleUpload(req, res) {
 
 export default async function handler(req, res) {
   try {
+    // requireAuth reads req.headers.cookie directly — needs the request
+    // NOT to have been consumed yet, which is fine since bodyParser is off.
     const action = req.query.action;
     if (action === 'candidate') return handleCandidate(req, res);
     if (action === 'upload') return handleUpload(req, res);
@@ -153,4 +169,5 @@ export default async function handler(req, res) {
     console.error('api/people error:', e);
     return res.status(500).json({ error: e.message });
   }
-}
+    }
+      

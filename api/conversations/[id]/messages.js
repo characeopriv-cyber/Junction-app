@@ -1,9 +1,12 @@
 // /api/conversations/[id]/messages — GET messages, POST send a message,
-// PATCH mark as read. Extends the original text-only version with
-// attachment support (image/file/voice/video/link) for Connect.
+// PATCH mark as read.
 //
-// Requires these columns added to your existing `messages` table, plus
-// two new columns on `conversations` for linking a chat to a listing:
+// SECURITY: requires a valid session, and verifies the signed-in user is
+// actually a participant of this conversation before allowing read or
+// write — previously anyone could read or post into any conversation ID.
+//
+// Requires these columns on your existing `messages` table, plus two new
+// columns on `conversations` for linking a chat to a listing:
 //
 //   ALTER TABLE messages ADD COLUMN IF NOT EXISTS type TEXT NOT NULL DEFAULT 'text';
 //   ALTER TABLE messages ADD COLUMN IF NOT EXISTS media_url TEXT;
@@ -15,11 +18,28 @@
 //   ALTER TABLE conversations ADD COLUMN IF NOT EXISTS context_label TEXT;
 
 import { neon } from '@neondatabase/serverless';
+import { requireAuth } from '../../../lib/auth.js';
+
 const sql = neon(process.env.DATABASE_URL);
+
+async function isParticipant(conversationId, userId) {
+  const rows = await sql`
+    SELECT 1 FROM conversation_participants WHERE conversation_id = ${conversationId} AND user_id = ${userId} LIMIT 1
+  `;
+  return rows.length > 0;
+}
 
 export default async function handler(req, res) {
   const { id } = req.query;
   try {
+    const me = requireAuth(req, res);
+    if (!me) return;
+
+    if (!(await isParticipant(id, me))) {
+      res.status(403).json({ error: "You're not part of this conversation" });
+      return;
+    }
+
     if (req.method === 'GET') {
       const rows = await sql`
         SELECT id, sender_id, type, body, media_url, media_meta, read_at, created_at
@@ -30,25 +50,25 @@ export default async function handler(req, res) {
       return;
     }
     if (req.method === 'POST') {
-      const { senderId, body, type = 'text', mediaUrl, mediaMeta } = req.body || {};
+      const { body, type = 'text', mediaUrl, mediaMeta } = req.body || {};
       if (!body && !mediaUrl) {
         res.status(400).json({ error: 'body or mediaUrl is required' });
         return;
       }
+      // sender_id is always the verified session user — never client-supplied.
       const rows = await sql`
         INSERT INTO messages (conversation_id, sender_id, type, body, media_url, media_meta)
-        VALUES (${id}, ${senderId || null}, ${type}, ${body || null}, ${mediaUrl || null}, ${mediaMeta ? JSON.stringify(mediaMeta) : null})
+        VALUES (${id}, ${me}, ${type}, ${body || null}, ${mediaUrl || null}, ${mediaMeta ? JSON.stringify(mediaMeta) : null})
         RETURNING id, sender_id, type, body, media_url, media_meta, created_at
       `;
       res.status(201).json({ message: rows[0] });
       return;
     }
     if (req.method === 'PATCH') {
-      const { readerId } = req.body || {};
-      if (!readerId) { res.status(400).json({ error: 'readerId is required' }); return; }
+      // Mark as read is always for the verified session user.
       await sql`
         UPDATE messages SET read_at = now()
-        WHERE conversation_id = ${id} AND sender_id != ${readerId} AND read_at IS NULL
+        WHERE conversation_id = ${id} AND sender_id != ${me} AND read_at IS NULL
       `;
       res.status(200).json({ success: true });
       return;
@@ -57,4 +77,4 @@ export default async function handler(req, res) {
   } catch (err) {
     res.status(500).json({ error: `Database error: ${err.message}` });
   }
-          }
+}

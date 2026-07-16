@@ -1,9 +1,10 @@
 // /api/auth/register — real account creation, backed by Neon Postgres
 //
-// POST { email, password, name, role? } → { user }
+// POST { email, password, name, role? } → { user }, sets a real session cookie.
 
 import { neon } from '@neondatabase/serverless';
 import { createHash, randomBytes } from 'crypto';
+import { setSessionCookie } from '../../lib/auth.js';
 
 const sql = neon(process.env.DATABASE_URL);
 
@@ -34,7 +35,9 @@ export default async function handler(req, res) {
       VALUES (${email}, ${passwordHash}, ${name}, ${role || 'BUYER'})
       RETURNING id, email, name, role, created_at
     `;
-    res.status(201).json({ user: rows[0] });
+    const user = rows[0];
+    setSessionCookie(res, user.id);
+    res.status(201).json({ user });
   } catch (err) {
     res.status(500).json({ error: `Database error: ${err.message}` });
   }

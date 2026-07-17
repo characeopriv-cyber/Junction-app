@@ -1,17 +1,6 @@
-// /api/assistant — Junction AI proxy
-//
-// Vercel auto-deploys any file in /api as a serverless function,
-// regardless of the frontend framework (Vite, CRA, etc). This is the
-// ONLY place the Anthropic API key is used — it never reaches the browser.
-//
-// Setup on Vercel:
-//   1. Project → Settings → Environment Variables
-//   2. Add ANTHROPIC_API_KEY = sk-ant-... (Production + Preview)
-//   3. Redeploy
-//
-// Request body:  { system: string, messages: {role, content}[], maxTokens?: number }
-// Response body: { reply: string }
-
+// Junction AI proxy — the browser never sees the Anthropic API key.
+// Requires ANTHROPIC_API_KEY to be set in the Vercel project's
+// Environment Variables (Project Settings → Environment Variables).
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     res.status(405).json({ error: "Method not allowed" });
@@ -22,18 +11,18 @@ export default async function handler(req, res) {
   if (!apiKey) {
     res.status(500).json({
       error:
-        "ANTHROPIC_API_KEY is not set on the server. Add it in Vercel → Project → Settings → Environment Variables, then redeploy.",
+        "ANTHROPIC_API_KEY isn't set on this deployment yet — add it in Vercel → Project Settings → Environment Variables, then redeploy.",
     });
     return;
   }
 
-  const { system, messages, maxTokens } = req.body || {};
-  if (!Array.isArray(messages) || messages.length === 0) {
-    res.status(400).json({ error: "`messages` must be a non-empty array" });
-    return;
-  }
-
   try {
+    const { system, messages, maxTokens } = req.body || {};
+    if (!Array.isArray(messages) || messages.length === 0) {
+      res.status(400).json({ error: "messages array is required" });
+      return;
+    }
+
     const upstream = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
@@ -43,26 +32,28 @@ export default async function handler(req, res) {
       },
       body: JSON.stringify({
         model: "claude-sonnet-4-6",
-        max_tokens: maxTokens || 600,
-        system: system || "",
+        max_tokens: Math.min(Math.max(Number(maxTokens) || 600, 1), 4096),
+        system: system || undefined,
         messages,
       }),
     });
 
+    const data = await upstream.json();
     if (!upstream.ok) {
-      const errText = await upstream.text();
-      res.status(upstream.status).json({ error: `Anthropic API error: ${errText}` });
+      res.status(upstream.status).json({
+        error: data?.error?.message || `Assistant upstream error (${upstream.status})`,
+      });
       return;
     }
 
-    const data = await upstream.json();
     const reply = (data.content || [])
-      .map((b) => (b.type === "text" ? b.text : ""))
-      .filter(Boolean)
-      .join("\n");
+      .filter((block) => block.type === "text")
+      .map((block) => block.text)
+      .join("\n")
+      .trim();
 
     res.status(200).json({ reply });
-  } catch (err) {
-    res.status(500).json({ error: `Assistant request failed: ${err.message}` });
+  } catch (e) {
+    res.status(500).json({ error: e.message || "Assistant request failed" });
   }
 }

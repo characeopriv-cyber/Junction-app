@@ -81,7 +81,8 @@ function mapAuthUser(row) {
 
 export default async function handler(req, res) {
   try {
-    const segments = Array.isArray(req.query.path) ? req.query.path : [];
+    const urlPath = (req.url || "").split("?")[0];
+    const segments = urlPath.replace(/^\/?api\/?/, "").split("/").filter(Boolean).map((s) => decodeURIComponent(s));
     const resource = segments[0] || "";
     const method = req.method;
     const { token, user } = await getSession(req);

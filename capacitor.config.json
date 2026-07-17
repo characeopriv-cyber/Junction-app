@@ -1,0 +1,17 @@
+{
+  "appId": "technology.junction.app",
+  "appName": "Junction",
+  "webDir": "dist",
+  "server": {
+    "url": "https://www.junction.technology",
+    "cleartext": false
+  },
+  "backgroundColor": "#0A0F1A",
+  "ios": {
+    "contentInset": "automatic",
+    "backgroundColor": "#0A0F1A"
+  },
+  "android": {
+    "backgroundColor": "#0A0F1A"
+  }
+}
